@@ -8,8 +8,8 @@ from storefact import get_store
 from Crypto.Cipher import AES
 
 params = {
-    "account_name": os.environ.get("AZURE_SNAPSHOTTER_ACCOUNT_NAME"),
-    "account_key": os.environ.get("AZURE_SNAPSHOTTER_ACCOUNT_KEY"),
+    "account_name": os.environ["AZURE_SNAPSHOTTER_ACCOUNT_NAME"],
+    "account_key": os.environ["AZURE_SNAPSHOTTER_ACCOUNT_KEY"],
     "container": os.environ.get("AZURE_SNAPSHOTTER_CONTAINER", "backup"),
 }
 
@@ -79,33 +79,35 @@ def restore_to(target):
             f.write(data)
 
 
-def init(partition):
-    global _prefix, _nonce, _secret_key, _password, _partition
+def set_globals(timestamp):
+    global _prefix, _nonce, _secret_key, _password
     if _password is None:
         _password = getpass("Cyberpassword: ")
-    _partition = partition
-    _prefix = partition + "/" + datetime.now().strftime("%Y-%m-%d-%H") + "/"
+    _prefix = _partition + "/" + timestamp + "/"
     _nonce = hashlib.md5(_prefix.encode()).digest()
     _secret_key = hashlib.md5(_password.encode()).digest()
-
 
 @click.group()
 @click.option("--partition", default="")
 def main(partition):
-    init(partition)
+    global _partition
+    _partition = partition
 
 
-@click.option("--directory", required=True)
+@click.option("--directories", default=False)
 @main.command()
-def upload(directory):
-    backup_dir(directory)
+def upload(directories):
+    timestamp = datetime.now().strftime("%Y-%m-%d-%H")
+    set_globals(timestamp)
+    with open(directories, "r") as f:
+        for line in [l.rstrip() for l in f]:
+            print("Transfering " + line)
+            backup_dir(line)
 
 
 @click.option("--timestamp", required=True)
 @click.option("--destination", required=True)
 @main.command()
 def restore(timestamp, destination):
-    global _prefix, _nonce
-    _prefix = _partition + "/" + timestamp + "/"
-    _nonce = hashlib.md5(_prefix.encode()).digest()
+    set_globals(timestamp)
     restore_to(destination)

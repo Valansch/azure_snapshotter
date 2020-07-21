@@ -1,7 +1,9 @@
 import os
+import json
 import hashlib
 from getpass import getpass
 from datetime import datetime
+from dataclasses import dataclass
 
 import click
 from storefact import get_store
@@ -14,12 +16,30 @@ params = {
 }
 
 
+@dataclass(frozen=True)
+class MetaData:
+    md5sum: str
+
+    def serialize(self):
+        return self.__dict__
+
+
+class MetaTable(dict):
+    def to_json(self):
+        return json.dumps(self, default=MetaData.serialize)
+
+    def from_json(self, json_str):
+        self.update(json.loads(json_str))
+
+
 _store = get_store("hazure", **params)
 _prefix = None
 _nonce = None
 _secret_key = None
 _password = os.environ.get("AZURE_SNAPSHOTTER_CYBERPASSWORD")
 _partition = None
+META_TABLE_KEY = "AZURE_SNAPSHOTTER_META_TABLE_KEY"
+meta_table = MetaTable()
 
 
 def encrypt(data):
@@ -43,7 +63,10 @@ def _put(key, value):
 
 
 def _get(key):
-    ciphertext = _store.get(_prefix + key)
+    try:
+        ciphertext = _store.get(_prefix + key)
+    except KeyError:
+        return None
     return decrypt(ciphertext)
 
 
@@ -51,20 +74,23 @@ def _keys():
     return [x[len(_prefix) :] for x in _store.keys(prefix=_prefix)]
 
 
-def backup_dir(path):
+def _backup_dir(path):
     for f in os.listdir(path):
         full_file_path = os.path.join(path, f)
 
         if os.path.isdir(full_file_path):
             backup_dir(full_file_path)
         else:
+            print(full_file_path)
             key = full_file_path
-            if full_file_path[0] == u"/":
-                key = full_file_path[1:]
             with open(full_file_path, "rb") as file_handler:
                 data = file_handler.read()
                 _put(key, data)
-                print(key)
+
+
+def backup_dir(path):
+    _backup_dir(path)
+    _put(META_TABLE_KEY, meta_table.to_json())
 
 
 def restore_to(target):
@@ -74,18 +100,24 @@ def restore_to(target):
         if not os.path.exists(dirname):
             os.makedirs(dirname, exist_ok=True)
         with open(filename, "wb") as f:
-            data = _get(key)
             print(filename)
+            data = _get(key)
             f.write(data)
 
 
-def set_globals(timestamp):
+def init(timestamp):
     global _prefix, _nonce, _secret_key, _password
     if _password is None:
         _password = getpass("Cyberpassword: ")
-    _prefix = _partition + "/" + timestamp + "/"
+    if _partition == "":
+        _prefix = timestamp + "/"
+    else:
+        _prefix = _partition + "/" + timestamp + "/"
     _nonce = hashlib.md5(_prefix.encode()).digest()
     _secret_key = hashlib.md5(_password.encode()).digest()
+    meta_table_data = _get(META_TABLE_KEY) or "{}"
+    meta_table.from_json(meta_table_data)
+
 
 @click.group()
 @click.option("--partition", default="")
@@ -98,9 +130,9 @@ def main(partition):
 @main.command()
 def upload(directories):
     timestamp = datetime.now().strftime("%Y-%m-%d-%H")
-    set_globals(timestamp)
+    init(timestamp)
     with open(directories, "r") as f:
-        for line in [l.rstrip() for l in f]:
+        for line in [line.rstrip() for line in f]:
             print("Transfering " + line)
             backup_dir(line)
 
@@ -109,5 +141,5 @@ def upload(directories):
 @click.option("--destination", required=True)
 @main.command()
 def restore(timestamp, destination):
-    set_globals(timestamp)
+    init(timestamp)
     restore_to(destination)

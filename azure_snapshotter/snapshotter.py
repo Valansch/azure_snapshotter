@@ -42,7 +42,7 @@ _secret_key = None
 _password = os.environ.get("AZURE_SNAPSHOTTER_CYBERPASSWORD")
 _partition = None
 META_TABLE_KEY = "AZURE_SNAPSHOTTER_META_TABLE_KEY"
-TEMP_FOLDER = "/tmp/var/azure_snapshotter/"
+TEMP_FOLDER = "/var/tmp/azure_snapshotter/"
 PY_CRYPT_BUFFER_SIZE = 64 * 1024
 meta_table = MetaTable()
 

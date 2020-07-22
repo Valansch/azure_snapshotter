@@ -1,11 +1,13 @@
 import os
 import json
 import hashlib
+from random import random
 from getpass import getpass
 from datetime import datetime
 from dataclasses import dataclass
 
 import click
+import pyAesCrypt
 from storefact import get_store
 from Crypto.Cipher import AES
 
@@ -39,7 +41,18 @@ _secret_key = None
 _password = os.environ.get("AZURE_SNAPSHOTTER_CYBERPASSWORD")
 _partition = None
 META_TABLE_KEY = "AZURE_SNAPSHOTTER_META_TABLE_KEY"
+TEMP_FOLDER = "/tmp/azure_snapshotter/"
+PY_CRYPT_BUFFER_SIZE = 64 * 1024
 meta_table = MetaTable()
+
+
+def temp_file_name():
+    return os.path.join(TEMP_FOLDER, str(random()))
+
+
+def rm(file_name):
+    if os.path.exists(file_name):
+        os.remove(file_name)
 
 
 def encrypt(data):
@@ -61,9 +74,12 @@ def _put(key, value):
     ciphertext = encrypt(value)
     _store.put(_prefix + key, ciphertext)
 
-def _put_data(key, value):
-    ciphertext = encrypt(value)
-    _store.put(_partition + "/files/" + key, ciphertext)
+
+def _put_file(key, file_name):
+    cache_file_name = temp_file_name()
+    pyAesCrypt.encryptFile(file_name, cache_file_name, _password, PY_CRYPT_BUFFER_SIZE)
+    _store.put_file(_partition + "/files/" + key, cache_file_name)
+    rm(cache_file_name)
 
 
 def _get(key):
@@ -73,19 +89,26 @@ def _get(key):
         return None
     return decrypt(ciphertext)
 
-def _get_data(key):
+
+def _get_file(key, target):
+    cache_file_name = temp_file_name()
     try:
-        ciphertext = _store.get(_partition + "/files/" + + key)
+        with open(cache_file_name, "wb") as temp_file:
+            _store.get_file(_partition + "/files/" + key, temp_file)
     except KeyError:
-        return None
-    return decrypt(ciphertext)
+        print("Warning: Expected file " + key + " missing.")
+    pyAesCrypt.decryptFile(cache_file_name, target, _password, PY_CRYPT_BUFFER_SIZE)
 
 
 def _keys():
     return [x[len(_prefix) :] for x in _store.keys(prefix=_prefix)]
 
+
 def _files():
-    return [x[len(_partition + "/files/") :] for x in _store.keys(prefix=_partition + "/files/")]
+    return [
+        x[len(_partition + "/files/") :]
+        for x in _store.keys(prefix=_partition + "/files/")
+    ]
 
 
 def md5(file_name):
@@ -95,7 +118,8 @@ def md5(file_name):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
-def _backup_dir(path, files = None):
+
+def _backup_dir(path, files=None):
     files = files if files else _files()
     for f in os.listdir(path):
         full_file_path = os.path.join(path, f)
@@ -109,9 +133,7 @@ def _backup_dir(path, files = None):
                 print(full_file_path + " [Skipped]")
             else:
                 print(full_file_path)
-                with open(full_file_path, "rb") as file_handler:
-                    data = file_handler.read()
-                    _put_data(md5sum, data)
+                _put_file(md5sum, full_file_path)
 
 
 def backup_dir(path):
@@ -129,10 +151,7 @@ def restore_to(target):
         if not os.path.exists(dirname):
             os.makedirs(dirname, exist_ok=True)
         print(filename)
-        with open(filename, "wb") as f:
-            print(filename)
-            data = _get_data(azure_key)
-            f.write(data)
+        _get_file(azure_key, filename)
 
 
 def init(timestamp):
@@ -144,6 +163,8 @@ def init(timestamp):
     _secret_key = hashlib.md5(_password.encode()).digest()
     meta_table_data = _get(META_TABLE_KEY) or "{}"
     meta_table.from_json(meta_table_data)
+    if not os.path.exists(TEMP_FOLDER):
+        os.makedirs(TEMP_FOLDER, exist_ok=True)
 
 
 @click.group()

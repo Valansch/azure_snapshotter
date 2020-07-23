@@ -43,7 +43,7 @@ _secret_key = None
 _password = os.environ.get("AZURE_SNAPSHOTTER_CYBERPASSWORD")
 _partition = None
 _progress_bytes = 0
-_total_bytes = 1
+_total_bytes = 420
 META_TABLE_KEY = "AZURE_SNAPSHOTTER_META_TABLE_KEY"
 TEMP_FOLDER = "/var/tmp/azure_snapshotter/"
 PY_CRYPT_BUFFER_SIZE = 64 * 1024
@@ -179,31 +179,40 @@ def _get_file(meta_data, target):
     key = meta_data["md5sum"]
     encryption_mode = meta_data["encryption_mode"]
     update_progress(f"[downloading] {target}")
+
     global _progress_bytes
-    if encryption_mode == "in-memory":
-        with open(target, "wb") as f:
-            f.write(_get(key=key, prefix=_partition + "/"))
+    if os.path.exists(target):
+        file_md5 = md5(target)
+        if key == file_md5:
             _progress_bytes += meta_data["file_size"]
-    elif encryption_mode == "streaming":
-        cyber_file = temp_file_name()
-        cleartext_file = temp_file_name()
-        try:
-            with open(cyber_file, "wb") as f:
-                _store.get_file(_partition + "/files/" + key, f)
-        except KeyError:
-            print("Warning: Expected file " + key + " missing.")
-        _progress_bytes += meta_data["file_size"]
-        update_progress(f"[decrypting] {target}")
-        pyAesCrypt.decryptFile(
-            cyber_file, cleartext_file, _password, PY_CRYPT_BUFFER_SIZE
-        )
-        update_progress(f"[copying]     {target}")
-        remove_nonce(cleartext_file, calculate_nonce(key))
-        copyfile(cleartext_file, target)
-        rm_rf(cyber_file)
-        rm_rf(cleartext_file)
+            update_progress(f"[Skipping]  {target}")
+        else:
+            raise KeyError(f"{target} already exists.")
     else:
-        raise ValueError(f"Invalid memory mode: {encryption_mode}")
+        if encryption_mode == "in-memory":
+            with open(target, "wb") as f:
+                f.write(_get(key=key, prefix=_partition + "/"))
+                _progress_bytes += meta_data["file_size"]
+        elif encryption_mode == "streaming":
+            cyber_file = temp_file_name()
+            cleartext_file = temp_file_name()
+            try:
+                with open(cyber_file, "wb") as f:
+                    _store.get_file(_partition + "/files/" + key, f)
+            except KeyError:
+                print("Warning: Expected file " + key + " missing.")
+            _progress_bytes += meta_data["file_size"]
+            update_progress(f"[decrypting] {target}")
+            pyAesCrypt.decryptFile(
+                cyber_file, cleartext_file, _password, PY_CRYPT_BUFFER_SIZE
+            )
+            update_progress(f"[copying]     {target}")
+            remove_nonce(cleartext_file, calculate_nonce(key))
+            copyfile(cleartext_file, target)
+            rm_rf(cyber_file)
+            rm_rf(cleartext_file)
+        else:
+            raise ValueError(f"Invalid memory mode: {encryption_mode}")
 
 
 def _keys():
@@ -305,13 +314,11 @@ def upload(directories, force):
 
 @click.option("--timestamp", required=True)
 @click.option("--destination", required=True)
-@click.option("--force", is_flag=True, default=False)
 @main.command()
-def restore(timestamp, destination, force):
-    global _total_bytes, _force
-    _force = force
+def restore(timestamp, destination):
+    global _total_bytes
     init(timestamp)
-    _total_bytes =meta_table["total_file_size"]
+    _total_bytes = meta_table["total_file_size"]
     restore_to(destination)
     update_progress("Success", finish=True)
     rm_rf(TEMP_FOLDER)

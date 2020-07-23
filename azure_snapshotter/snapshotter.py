@@ -37,7 +37,6 @@ class MetaTable(dict):
 
 _store = get_store("hazure", **params)
 _prefix = None
-_nonce = None
 _secret_key = None
 _password = os.environ.get("AZURE_SNAPSHOTTER_CYBERPASSWORD")
 _partition = None
@@ -51,19 +50,26 @@ def temp_file_name():
     return os.path.join(TEMP_FOLDER, str(random()))
 
 
-def rm(file_name):
+def rm_rf(file_name):
     if os.path.exists(file_name):
-        os.remove(file_name)
+        if os.path.isdir(file_name):
+            rmtree(file_name, ignore_errors=True)
+        else:
+            os.remove(file_name)
 
 
-def encrypt(data):
-    cipher = AES.new(_secret_key, AES.MODE_EAX, nonce=_nonce)
+def calculate_nonce(seed_str):
+    return hashlib.md5(seed_str.encode()).digest()
+
+
+def encrypt(data, nonce):
+    cipher = AES.new(_secret_key, AES.MODE_EAX, nonce=nonce)
     ciphertext, _ = cipher.encrypt_and_digest(data)
     return ciphertext
 
 
-def decrypt(data):
-    cipher = AES.new(_secret_key, AES.MODE_EAX, nonce=_nonce)
+def decrypt(data, nonce):
+    cipher = AES.new(_secret_key, AES.MODE_EAX, nonce=nonce)
     return cipher.decrypt(data)
 
 
@@ -72,30 +78,30 @@ def _delete(key):
 
 
 def _put(key, value):
-    ciphertext = encrypt(value)
+    ciphertext = encrypt(value, calculate_nonce(key))
     _store.put(_prefix + key, ciphertext)
 
 
-def add_nonce(file_name):
+def add_nonce(file_name, nonce):
     with open(file_name, "ab") as f:
-        f.write(_nonce)
+        f.write(nonce)
 
 
-def remove_nonce(file_name):
+def remove_nonce(file_name, nonce):
     with open(file_name, "ab+") as f:
-        f.seek(-len(_nonce), os.SEEK_END)
+        f.seek(-len(nonce), os.SEEK_END)
         f.truncate()
 
 
 def _put_file(key, file_name):
     cleartext_file = temp_file_name()
     copyfile(file_name, cleartext_file)
-    add_nonce(cleartext_file)
+    add_nonce(cleartext_file, calculate_nonce(key))
     cyber_file = temp_file_name()
     pyAesCrypt.encryptFile(cleartext_file, cyber_file, _password, PY_CRYPT_BUFFER_SIZE)
     _store.put_file(_partition + "/files/" + key, cyber_file)
-    rm(cleartext_file)
-    rm(cyber_file)
+    rm_rf(cleartext_file)
+    rm_rf(cyber_file)
 
 
 def _get(key):
@@ -103,7 +109,7 @@ def _get(key):
         ciphertext = _store.get(_prefix + key)
     except KeyError:
         return None
-    return decrypt(ciphertext)
+    return decrypt(ciphertext, calculate_nonce(key))
 
 
 def _get_file(key, target):
@@ -115,10 +121,10 @@ def _get_file(key, target):
     except KeyError:
         print("Warning: Expected file " + key + " missing.")
     pyAesCrypt.decryptFile(cyber_file, cleartext_file, _password, PY_CRYPT_BUFFER_SIZE)
-    remove_nonce(cleartext_file)
+    remove_nonce(cleartext_file, calculate_nonce(key))
     copyfile(cleartext_file, target)
-    rm(cyber_file)
-    rm(cleartext_file)
+    rm_rf(cyber_file)
+    rm_rf(cleartext_file)
 
 
 def _keys():
@@ -180,11 +186,10 @@ def init(timestamp):
     if _password is None:
         _password = getpass("Cyberpassword: ")
     _prefix = _partition + "/" + timestamp + "/"
-    _nonce = hashlib.md5(_prefix.encode()).digest()
     _secret_key = hashlib.md5(_password.encode()).digest()
     meta_table_data = _get(META_TABLE_KEY) or "{}"
     meta_table.from_json(meta_table_data)
-    rmtree(TEMP_FOLDER, ignore_errors=True)
+    rm_rf(TEMP_FOLDER)
     if not os.path.exists(TEMP_FOLDER):
         os.makedirs(TEMP_FOLDER, exist_ok=True)
 
@@ -205,7 +210,7 @@ def upload(directories):
         for line in [line.rstrip() for line in f]:
             print("Transfering " + line)
             backup_dir(line)
-    rmtree(TEMP_FOLDER)
+    rm_rf(TEMP_FOLDER)
 
 
 @click.option("--timestamp", required=True)
@@ -214,4 +219,4 @@ def upload(directories):
 def restore(timestamp, destination):
     init(timestamp)
     restore_to(destination)
-    rmtree(TEMP_FOLDER)
+    rm_rf(TEMP_FOLDER)

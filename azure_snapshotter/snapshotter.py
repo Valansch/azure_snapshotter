@@ -23,6 +23,7 @@ params = {
 class MetaData:
     md5sum: str
     encryption_mode: str
+    file_size: int
 
     def serialize(self):
         return self.__dict__
@@ -51,16 +52,17 @@ _max_line_length = 100
 meta_table = MetaTable()
 
 
-def update_progress(status_str, key=""):
+def update_progress(status_str, finish=False):
     percent = ("{0:.1f}").format(100 * (_progress_bytes / float(_total_bytes)))
-    filledLength = int(41 * _progress_bytes / _total_bytes)
-    bar = "█" * filledLength + "-" * (40 - filledLength)
+    filled_length = int(41 * _progress_bytes / _total_bytes)
+    bar = "█" * filled_length + "-" * (40 - filled_length)
     output_buffer = f"\r {human_readable_size(_progress_bytes)} |{bar}| {human_readable_size(_total_bytes)} | {percent}% {status_str}"
     global _max_line_length
     if len(output_buffer) > _max_line_length:
         _max_line_length = len(output_buffer)
     output_buffer += " " * (_max_line_length - len(output_buffer))
-    print(output_buffer, end="\r")
+    end = "\n" if finish else "\r"
+    print(output_buffer, end=end)
 
 
 def temp_file_name():
@@ -111,9 +113,10 @@ def _delete(key):
     _store.delete(_prefix + key)
 
 
-def _put(key, value):
+def _put(key, value, prefix=None):
+    prefix = prefix if prefix else _prefix
     ciphertext = encrypt(value, calculate_nonce(key))
-    _store.put(_prefix + key, ciphertext)
+    _store.put(prefix + key, ciphertext)
 
 
 def add_nonce(file_name, nonce):
@@ -144,7 +147,7 @@ def _put_file_streaming(file_name, key):
 def _put_file_in_memory(file_name, key):
     update_progress("[Uploading]  " + file_name)
     with open(file_name, "rb") as f:
-        _put(key, f.read())
+        _put(key, f.read(), prefix=_partition + "/")
 
 def _put_file(key, file_name, size, skip):
     if size > 16777216:
@@ -160,12 +163,13 @@ def _put_file(key, file_name, size, skip):
         else:
             _put_file_in_memory(file_name, key)
 
-    meta_table[file_name] = MetaData(md5sum=key, encryption_mode=encryption_mode)
+    meta_table[file_name] = MetaData(md5sum=key, encryption_mode=encryption_mode, file_size=size)
 
 
-def _get(key):
+def _get(key, prefix=None):
+    prefix = prefix if prefix else _prefix
     try:
-        ciphertext = _store.get(_prefix + key)
+        ciphertext = _store.get(prefix + key)
     except KeyError:
         return None
     return decrypt(ciphertext, calculate_nonce(key))
@@ -174,9 +178,12 @@ def _get(key):
 def _get_file(meta_data, target):
     key = meta_data["md5sum"]
     encryption_mode = meta_data["encryption_mode"]
+    update_progress(f"[downloading] {target}")
+    global _progress_bytes
     if encryption_mode == "in-memory":
         with open(target, "wb") as f:
-            f.write(_get(key))
+            f.write(_get(key=key, prefix=_partition + "/"))
+            _progress_bytes += meta_data["file_size"]
     elif encryption_mode == "streaming":
         cyber_file = temp_file_name()
         cleartext_file = temp_file_name()
@@ -185,9 +192,12 @@ def _get_file(meta_data, target):
                 _store.get_file(_partition + "/files/" + key, f)
         except KeyError:
             print("Warning: Expected file " + key + " missing.")
+        _progress_bytes += meta_data["file_size"]
+        update_progress(f"[decrypting] {target}")
         pyAesCrypt.decryptFile(
             cyber_file, cleartext_file, _password, PY_CRYPT_BUFFER_SIZE
         )
+        update_progress(f"[copying]     {target}")
         remove_nonce(cleartext_file, calculate_nonce(key))
         copyfile(cleartext_file, target)
         rm_rf(cyber_file)
@@ -228,7 +238,7 @@ def _backup_dir(path, files=None):
             skip = False
             if md5sum in files and not _force:
                 skip = True
-            _put_file(md5sum, full_file_path, file_size, skip)
+            _put_file(key=md5sum, file_name=full_file_path, size=file_size, skip=skip)
             global _progress_bytes
             _progress_bytes += file_size
 
@@ -236,19 +246,20 @@ def _backup_dir(path, files=None):
 def backup_dir(path):
     _backup_dir(path)
     update_progress("Uploading meta table")
+    meta_table["total_file_size"] = _total_bytes
     _put(META_TABLE_KEY, meta_table.to_json().encode())
 
 
 def restore_to(target):
-    meta_table_data = _get(META_TABLE_KEY)
-    meta_table.from_json(meta_table_data.decode())
-    for partial_filename, meta_data in meta_table.items():
-        filename = os.path.join(target, partial_filename)
-        dirname = os.path.dirname(filename)
-        if not os.path.exists(dirname):
-            os.makedirs(dirname, exist_ok=True)
-        print(filename)
-        _get_file(meta_data, filename)
+    global _total_file_side
+    _total_bytes = meta_table["total_file_size"]
+    for key, meta_data in meta_table.items():
+        if type(meta_data) == dict:
+            filename = os.path.join(target, key)
+            dirname = os.path.dirname(filename)
+            if not os.path.exists(dirname):
+                os.makedirs(dirname, exist_ok=True)
+            _get_file(meta_data, filename)
 
 
 def init(timestamp):
@@ -289,14 +300,18 @@ def upload(directories, force):
     for directory_path in directories_lines:
         backup_dir(directory_path)
     rm_rf(TEMP_FOLDER)
-    print()
-    print("Success")
+    update_progress("Success", finish=True)
 
 
 @click.option("--timestamp", required=True)
 @click.option("--destination", required=True)
+@click.option("--force", is_flag=True, default=False)
 @main.command()
-def restore(timestamp, destination):
+def restore(timestamp, destination, force):
+    global _total_bytes, _force
+    _force = force
     init(timestamp)
+    _total_bytes =meta_table["total_file_size"]
     restore_to(destination)
+    update_progress("Success", finish=True)
     rm_rf(TEMP_FOLDER)

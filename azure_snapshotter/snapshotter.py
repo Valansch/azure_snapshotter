@@ -155,7 +155,7 @@ def _put_file(key, file_name, size, skip):
             _put_file_streaming(file_name, key)
     else:
         encryption_mode = "in-memory"
-        if skip and False:
+        if skip:
             update_progress("[Skipped]    " + file_name)
         else:
             _put_file_in_memory(file_name, key)

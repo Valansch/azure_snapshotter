@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import hashlib
 from random import random
@@ -136,18 +137,18 @@ def _put_file_streaming(file_name, key):
     copyfile(file_name, cleartext_file)
     add_nonce(cleartext_file, calculate_nonce(key))
     cyber_file = temp_file_name()
-    pyAesCrypt.encryptFile(
-        cleartext_file, cyber_file, _password, PY_CRYPT_BUFFER_SIZE
-    )
+    pyAesCrypt.encryptFile(cleartext_file, cyber_file, _password, PY_CRYPT_BUFFER_SIZE)
     update_progress("[Uploading]  " + file_name)
     _store.put_file(_partition + "/files/" + key, cyber_file)
     rm_rf(cleartext_file)
     rm_rf(cyber_file)
 
+
 def _put_file_in_memory(file_name, key):
     update_progress("[Uploading]  " + file_name)
     with open(file_name, "rb") as f:
-        _put(key, f.read(), prefix=_partition + "/")
+        _put(key, f.read(), prefix=_partition + "/files/")
+
 
 def _put_file(key, file_name, size, skip):
     if size > 16777216:
@@ -163,7 +164,9 @@ def _put_file(key, file_name, size, skip):
         else:
             _put_file_in_memory(file_name, key)
 
-    meta_table[file_name] = MetaData(md5sum=key, encryption_mode=encryption_mode, file_size=size)
+    meta_table[file_name] = MetaData(
+        md5sum=key, encryption_mode=encryption_mode, file_size=size
+    )
 
 
 def _get(key, prefix=None):
@@ -187,11 +190,11 @@ def _get_file(meta_data, target):
             _progress_bytes += meta_data["file_size"]
             update_progress(f"[Skipping]  {target}")
         else:
-            raise KeyError(f"{target} already exists.")
+            raise ValueError(f"{target} already exists.")
     else:
         if encryption_mode == "in-memory":
             with open(target, "wb") as f:
-                f.write(_get(key=key, prefix=_partition + "/"))
+                f.write(_get(key=key, prefix=_partition + "/files/"))
                 _progress_bytes += meta_data["file_size"]
         elif encryption_mode == "streaming":
             cyber_file = temp_file_name()
@@ -260,8 +263,6 @@ def backup_dir(path):
 
 
 def restore_to(target):
-    global _total_file_side
-    _total_bytes = meta_table["total_file_size"]
     for key, meta_data in meta_table.items():
         if type(meta_data) == dict:
             filename = os.path.join(target, key)
@@ -318,6 +319,11 @@ def upload(directories, force):
 def restore(timestamp, destination):
     global _total_bytes
     init(timestamp)
+    if meta_table == {}:
+        print(
+            f'Error: No backup with timestamp "{timestamp}" exists at partition "{_partition}".'
+        )
+        sys.exit(1)
     _total_bytes = meta_table["total_file_size"]
     restore_to(destination)
     update_progress("Success", finish=True)

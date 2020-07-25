@@ -237,13 +237,13 @@ def md5(file_name):
     return hash_md5.hexdigest()
 
 
-def _backup_dir(path, files=None):
+def backup_dir(path, files=None):
     files = files if files else _files()
     for f in os.listdir(path):
         full_file_path = os.path.join(path, f)
 
         if os.path.isdir(full_file_path):
-            _backup_dir(full_file_path, files)
+            backup_dir(full_file_path, files)
         else:
             md5sum = md5(full_file_path)
             file_size = os.path.getsize(full_file_path)
@@ -253,13 +253,6 @@ def _backup_dir(path, files=None):
             _put_file(key=md5sum, file_name=full_file_path, size=file_size, skip=skip)
             global _progress_bytes
             _progress_bytes += file_size
-
-
-def backup_dir(path):
-    _backup_dir(path)
-    update_progress("Uploading meta table")
-    meta_table["total_file_size"] = _total_bytes
-    _put(META_TABLE_KEY, meta_table.to_json().encode())
 
 
 def restore_to(target):
@@ -310,6 +303,9 @@ def upload(directories, force):
         _total_bytes += dir_size(line)
     for directory_path in directories_lines:
         backup_dir(directory_path)
+    update_progress("Uploading meta table")
+    meta_table["total_file_size"] = _total_bytes
+    _put(META_TABLE_KEY, meta_table.to_json().encode())
     rm_rf(TEMP_FOLDER)
     update_progress("Success", finish=True)
 

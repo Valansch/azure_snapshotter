@@ -265,7 +265,7 @@ def backup_dir(path):
 def restore_to(target):
     for key, meta_data in meta_table.items():
         if type(meta_data) == dict:
-            filename = os.path.join(target, key)
+            filename = os.path.join(target, key.strip("/"))
             dirname = os.path.dirname(filename)
             if not os.path.exists(dirname):
                 os.makedirs(dirname, exist_ok=True)
@@ -305,6 +305,7 @@ def upload(directories, force):
     update_progress("Calculating upload size...")
     with open(directories, "r") as f:
         directories_lines = [line.rstrip() for line in f]
+    _total_bytes = 0
     for line in directories_lines:
         _total_bytes += dir_size(line)
     for directory_path in directories_lines:
